@@ -3,17 +3,36 @@
 > DeepSeek Harness (DSH) 插件包 + Agent 预设：**问答窗口**。
 > 一个会话里连续问互不相关的问题，每个新问题都只带着"当前这一问"进入模型。
 
-A DSH bundle that adds a `Q&A` agent preset. In a session using that preset, every new question is answered from a clean context — earlier exchanges are removed from the model's input (and from the cost) — with a one-click toggle for follow-up questions.
+A DSH bundle that adds a `Q&A` agent preset: each new question is answered from a clean context, so unrelated questions in one window never contaminate each other.
+
+## 两种模式，随时切换（隔离不是强制的）
+
+**单问模式是默认值，不是唯一行为。** 想连续追问，点一下 composer 上的开关或输入 `/qa follow` 即可，此后就恢复正常的不中断对话；想再隔离回来用 `/qa fresh`。
+
+| 模式 | 模型看到什么 | 适用 |
+|---|---|---|
+| **单问**（默认） | 只有系统提示 + 当前这一问 | 一个窗口里问一堆互不相关的问题 |
+| **追问** | 系统提示 + 切换后累积的问答 | 同一个话题需要多轮深入 |
+
+切换只影响**之后**的问题，历史仍完整保留在会话日志与界面转录里，随时可回看。
+
+English: isolation is the **default, not a forced behavior** — flip the composer toggle or run `/qa follow` for normal multi-turn conversation, `/qa fresh` to go back.
 
 ## 为什么需要它
 
-DSH 的会话是追加式事件溯源日志，不变量是"模型可见 ⟺ 已写日志"：没有任何配置开关能让一个会话"只看最新一条消息"。内置的压缩（compaction）会把旧历史换成摘要，但旧问题会以摘要残 form 泄漏，且每次都要额外调用一次模型写摘要。
+DSH 的会话是追加式事件溯源日志，不变量是"模型可见 ⟺ 已写日志"：没有任何配置开关能让一个会话"只看最新一条消息"。内置的压缩（compaction）会把旧历史换成摘要，但旧问题会以摘要形式残留下来，且每次都要额外调用一次模型写摘要。
 
 这个插件走官方支持的 **surface 替换**路径（与压缩落检查点同一条持久机制）：在每个新问题的第一步，把系统提示之后的全部旧节点替换成一条短标记。
 
 - 模型只看到「系统提示 + 标记 + 当前问题」；
 - **零额外模型调用**，无摘要残留；
 - 会话日志本身仍完整、可恢复，重启与恢复后行为一致。
+
+## 上下文会不会爆
+
+单问模式下**跨轮次不累积**：每次替换都把上一问和上一答一起移出，模型输入规模基本是个常数。两个例外由预设里挂的压缩组兜底——同一轮内的大量工具结果，以及单条超长输入（一次粘几十万 token 的日志）。
+
+切到追问模式后上下文会正常累积，长对话交给压缩处理。
 
 ## 安装
 
@@ -69,8 +88,22 @@ composer 工具行（模型选择器旁）会出现「单问 / 追问」开关�
 
 - **前缀缓存失效**：每次替换会使 provider 的前缀缓存从第一条历史 token 起失效，因此每个问题按全量输入计价。问答场景本来就是独立问题，通常可接受。
 - **界面转录不折叠**：Chat 渲染的是已加载的事件窗口而非 surface，所以旧问答在界面上仍可回看，只有模型上下文被清空。折叠转录需要接管官方 Chat 节点渲染（`shadows-shipped-ui` 级），风险高于收益，故未实现。
-- **追问模式不恢复历史**：切到追问只保留"当前仍在上下文里"的问答；此前已被移除的内容不会回来。
 - **按钮出现时机**：composer 席位常驻、组件只挂载一次，切换会话后开关可能在下次页面聚焦时才刷新——手动切走再切回即可。
+
+## 更新与发版
+
+本地迭代：目录即插件本体（符号链接安装），改完 `node --check index.js && node --check client.js`，然后**重启 DSH**——替换已安装包的 JS 必须加载新模块代，热重载覆盖不到。
+
+发布新版本：
+
+1. 改 `package.json` 的 `version`（与 tag 保持一致）；
+2. `git commit` + `git push origin main`；
+3. `git tag -a vX.Y.Z -m "..."` + `git push origin vX.Y.Z`；
+4. `gh release create vX.Y.Z --title ... --notes ...`。
+
+> 升级提示：pnpm 会用 lockfile 钉住 `github:owner/repo` 已解析出的 commit，所以已装过的用户重新安装未必自动升级。发版说明里请给出显式 ref：
+> `github:ShadowTang98/dsh-qa-isolation#vX.Y.Z`
+> 新增运行时文件时记得同步进 `package.json` 的 `files`，否则别人装到的是缺文件的版本，而本地因符号链接一切正常。
 
 ## 开发
 
