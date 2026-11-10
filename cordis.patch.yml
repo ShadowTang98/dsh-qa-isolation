@@ -1,0 +1,44 @@
+# Q&A isolation bundle:
+#  - one Host row: the plugin carries its browser half (the composer switch) and
+#    applies itself only to sessions whose Agent preset is `qa`;
+#  - one preset declaration `preset-qa`: the answer-only mode itself.
+# Nothing else in the profile changes.
+- insert:
+    - id: qa-isolation
+      name: 'dsh-qa-isolation'
+      config:
+        preset: qa
+    - id: preset-qa
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: qa
+        name: Q&A
+        description: 问答窗口：每个新问题默认从干净上下文开始作答；可用 composer 上的开关或 /qa follow 改为连续追问。
+        order: 5
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: |
+                你是一个专门回答问题的助手。用与用户提问相同的语言，直接、完整地回答用户当前的问题。
+                本会话有两种模式，由用户自行切换：单问模式（每个新问题都会先移除之前的问答）和连续追问模式（保留当前仍在上下文里的问答，已被移除的不会恢复）。
+                判断依据只看当前请求里实际有什么：如果历史里还有前面的问答，就说明此刻是连续追问模式，正常承接；如果开头是一条“上文已移除”之类的提示，那只说明它之前那几轮按单问模式作答，不代表现在也是单问模式。
+                不要向用户宣告本会话“总是”或“每次”如何运作，也不要猜测当前模式；需要说明时，以你实际能看到的历史为准。
+                回答要切题、简洁、结构清晰；不确定时坦率说明，不要编造。
+              complete: true
+              includeRuntimeContext: false
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'

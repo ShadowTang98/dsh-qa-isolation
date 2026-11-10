@@ -1,0 +1,42 @@
+{
+  "name": "dsh-qa-isolation",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Answer-only window for DeepSeek Harness: each new question is answered from a clean context, with a /qa switch and a composer toggle.",
+  "keywords": ["dsh", "dsh-plugin", "dsh-bundle", "agent-preset", "qa", "context-isolation"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ShadowTang98/dsh-qa-isolation.git"
+  },
+  "bugs": "https://github.com/ShadowTang98/dsh-qa-isolation/issues",
+  "homepage": "https://github.com/ShadowTang98/dsh-qa-isolation#readme",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+    }
+  }
+}

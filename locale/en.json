@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Q&A context isolation",
+    "description": "Answers unrelated questions in one window: each new question is answered from a clean model context, with a /qa follow switch for follow-ups."
+  }
+}
