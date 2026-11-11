@@ -195,6 +195,13 @@ export async function apply(ctx, config = {}) {
 	const { commands, agents, agentPresets: presets } = ctx;
 	const enabled = (session) => presetOf(presets, session) === presetId;
 
+	/** Resolve the live Agent one browser request addresses, from its query. */
+	const liveAgent = (request) => {
+		const sessionId = new URL(request.url, "http://localhost").searchParams.get("sessionId");
+		if (typeof sessionId !== "string" || sessionId.length === 0) return undefined;
+		return agents.get(sessionId);
+	};
+
 	ctx.on("agent/pre-step", ({ agent, step, messages }, next) => {
 		if (step !== 1 || messages.length === 0 || !enabled(agent.session)) return next();
 		if (readMode(agent.session) !== "fresh") return next();
@@ -232,36 +239,34 @@ export async function apply(ctx, config = {}) {
 		},
 	});
 
-	// Optional carrier: a profile with no HTTP server keeps the command and
-	// simply has no browser switch to serve.
+	/**
+	 * Browser-half transport. Both routes are read-only views of Host state
+	 * plus one write path that settles through `commands.execute`, so the typed
+	 * command and the composer switch leave an identical durable record.
+	 *
+	 * The Session id always comes from the page and is never guessed here:
+	 * resolving it to "the busiest live session" would offer the control in a
+	 * session under another preset, which is exactly what the switch must not
+	 * do.
+	 *
+	 * Optional: a profile with no HTTP carrier keeps `/qa` and simply has no
+	 * composer switch or `/clear`.
+	 */
 	ctx.inject(["webServer"], (httpCtx) => {
-		/**
-		 * Browser-switch transport. One operation, two callers: the button and
-		 * the typed command settle through the same `commands.execute` dispatch,
-		 * so the durable record is identical whichever path a person used.
-		 *
-		 * The Session id comes from the page and is never guessed here: resolving
-		 * it to "the busiest live session" would offer the control in a session
-		 * under another preset, which is exactly what the switch must not do.
-		 */
 		httpCtx.effect(() => {
-			const release = httpCtx.webServer.register({
+			const releaseMode = httpCtx.webServer.register({
 				kind: "exact",
 				path: "/dsh-qa/mode",
 				handler: async (request, response) => {
 					if (!sameOrigin(request)) return json(response, 403, { error: "cross-origin" });
-					if (commands === undefined || agents === undefined) return json(response, 503, { error: "session services unavailable" });
-					const url = new URL(request.url, "http://localhost");
-					const sessionId = url.searchParams.get("sessionId");
-					if (typeof sessionId !== "string" || sessionId.length === 0) return json(response, 200, { available: false, preset: presetId, reason: "no session id" });
-					const agent = agents.get(sessionId);
-					if (agent === undefined) return json(response, 200, { available: false, preset: presetId, reason: "session not live" });
-					if (!enabled(agent.session)) return json(response, 200, { available: false, preset: presetId, reason: "other preset" });
-					if (request.method === "GET") return json(response, 200, { available: true, mode: readMode(agent.session) });
+					const agent = liveAgent(request);
+					if (agent === undefined) return json(response, 400, { error: "session is not live" });
+					if (request.method === "GET") return json(response, 200, { available: enabled(agent.session), mode: readMode(agent.session), preset: presetOf(presets, agent.session) });
 					if (request.method !== "POST") {
 						response.writeHead(405, { allow: "GET, POST" });
 						return response.end();
 					}
+					if (!enabled(agent.session)) return json(response, 200, { available: false, preset: presetOf(presets, agent.session) });
 					let wanted;
 					try {
 						wanted = parseMode((await readJsonBody(request))?.mode);
@@ -274,7 +279,41 @@ export async function apply(ctx, config = {}) {
 					return json(response, 200, { available: true, mode: readMode(agent.session) });
 				},
 			});
-			return release;
-		}, "dsh-qa-isolation: mode route");
+
+			/**
+			 * What `/clear` needs to open a replacement session: the preset this
+			 * session runs and the Workspace it belongs to. The browser half
+			 * cannot read either reliably — the Client session list carries the
+			 * preset only as a cached hint, and availability checks are
+			 * synchronous — so both come from the Host.
+			 */
+			const releaseContext = httpCtx.webServer.register({
+				kind: "exact",
+				path: "/dsh-qa/context",
+				handler: (request, response) => {
+					if (!sameOrigin(request)) return json(response, 403, { error: "cross-origin" });
+					if (request.method !== "GET") {
+						response.writeHead(405, { allow: "GET" });
+						return response.end();
+					}
+					const agent = liveAgent(request);
+					if (agent === undefined) return json(response, 404, { error: "session is not live" });
+					const registry = httpCtx.get("workspaceRegistry");
+					let workspaceId = null;
+					try {
+						const found = registry?.list().find((workspace) => workspace.sessionIds.includes(agent.id));
+						workspaceId = found?.id ?? null;
+					} catch {
+						/* Unregistered session: the browser half falls back. */
+					}
+					return json(response, 200, { preset: presetOf(presets, agent.session), workspaceId });
+				},
+			});
+
+			return () => {
+				releaseMode();
+				releaseContext();
+			};
+		}, "dsh-qa-isolation: browser routes");
 	});
 }

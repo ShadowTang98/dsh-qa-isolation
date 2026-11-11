@@ -205,9 +205,123 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		/**
+		 * Menu glyph, drawn to match the host command rows: a 16-box stroke
+		 * icon in `currentColor`, rendered by the trigger menu at size 14.
+		 * An eraser wedge — "start over", not "delete".
+		 */
+		function ClearIcon(props) {
+			const size = props?.size ?? 14;
+			return h(
+				"svg",
+				{ viewBox: "0 0 16 16", width: size, height: size, fill: "none", "aria-hidden": true, focusable: "false", style: { display: "block" } },
+				h("path", { d: "M8.7 2.6 13.4 7.3a1.2 1.2 0 0 1 0 1.7l-3.1 3.1H6.2L3.1 10.7a1.2 1.2 0 0 1 0-1.7l5.6-6.4Z", stroke: "currentColor", strokeWidth: 1.2, strokeLinejoin: "round" }),
+				h("path", { d: "M6.1 5.4 10.6 9.9", stroke: "currentColor", strokeWidth: 1.2 }),
+				h("path", { d: "M2 14h12", stroke: "currentColor", strokeWidth: 1.2, strokeLinecap: "round" }),
+			);
+		}
+
+		/**
+		 * `/clear` action. One operation, no durable state: the conversation
+		 * continues in a fresh session under the same preset, so nothing here
+		 * needs a Host log record — which is why this command can live entirely
+		 * on the Client side and carry a menu icon.
+		 *
+		 * Order matters. Archiving first clears the main reference, so the
+		 * replacement session must be opened with an explicit workspace id
+		 * rather than relying on "the current session's workspace"; the Host
+		 * reports that id, and an absent one falls back to the official
+		 * recent-workspace choice.
+		 */
+		function makeClear(ctx) {
+			let busy = false;
+			const run = async (session) => {
+				if (busy) return;
+				busy = true;
+				const sessionId = session?.sessionId;
+				const uiWorkspace = ctx.get("uiWorkspace");
+				if (sessionId === undefined || uiWorkspace === undefined) {
+					busy = false;
+					return;
+				}
+				try {
+					let preset = null;
+					let workspaceId = null;
+					try {
+						const res = await fetch(`/dsh-qa/context?sessionId=${encodeURIComponent(sessionId)}`, { credentials: "same-origin" });
+						if (res.ok) {
+							const value = await res.json();
+							preset = typeof value.preset === "string" ? value.preset : null;
+							workspaceId = typeof value.workspaceId === "string" ? value.workspaceId : null;
+						}
+					} catch {
+						/* Route unavailable: fall back to the Host default preset. */
+					}
+					await uiWorkspace.archiveSession(sessionId);
+					uiWorkspace.startSession(workspaceId ?? void 0, preset === null ? {} : { agentPreset: preset });
+				} catch (error) {
+					console.error("clear failed:", error);
+				} finally {
+					busy = false;
+				}
+			};
+			/**
+			 * Availability stays deliberately cheap and synchronous: `commandUi`
+			 * polls it on every candidate pass, and the optional services are not
+			 * guaranteed to exist in every profile. The real gate is the Host call
+			 * itself — archiving a session with running work is refused there, and
+			 * that refusal surfaces below rather than hiding the command.
+			 */
+			const available = (session) => session?.sessionId !== undefined;
+			return ctx.commandUi.register({
+				name: "clear",
+				available,
+				label: () => "清空",
+				description: () => "归档当前会话，用同一预设开一个干净窗口",
+				icon: ClearIcon,
+				ui: { kind: "action", run },
+			});
+		}
+
 		return {
 			inject: ["slots"],
 			apply(ctx) {
+				ctx.effect(() => {
+					const release = [];
+					const register = (regCtx) => {
+						try {
+							const dispose = makeClear(regCtx);
+							if (typeof dispose === "function") release.push(dispose);
+						} catch (error) {
+							console.warn("dsh-qa-isolation: /clear registration failed:", error);
+						}
+					};
+					// Optional services: a profile without the command surface or
+					// workspace navigation keeps the composer switch and simply has
+					// no /clear, instead of failing the whole browser half. The
+					// restricted Client context may not expose `inject` at all.
+					let disposeInject;
+					if (typeof ctx.inject === "function") {
+						try {
+							disposeInject = ctx.inject(["commandUi", "uiWorkspace"], register);
+						} catch {
+							disposeInject = undefined;
+						}
+					} else if (ctx.get("commandUi") !== undefined && ctx.get("uiWorkspace") !== undefined) {
+						register(ctx);
+					}
+					return () => {
+						if (typeof disposeInject === "function") disposeInject();
+						for (const dispose of release) {
+							try {
+								dispose();
+							} catch {
+								/* Already released. */
+							}
+						}
+					};
+				}, "dsh-qa-isolation: /clear command");
+
 				// Preferred seat: the composer tool row, beside Send. The dock under
 				// the composer card is the fallback for a build without that seat.
 				// Either injection can fire first, so the loser withdraws: exactly one
